@@ -22,10 +22,10 @@ class VehiclePlateRecognizer:
         else:
             self.is_yolo = False
             
-        # Fallback to Haar Cascade if YOLO plate model is missing
+        # Fallback if YOLO plate model is missing
         if not self.is_yolo:
-            cascade_path = cv2.data.haarcascades + "haarcascade_russian_plate_number.xml"
-            self.cascade = cv2.CascadeClassifier(cascade_path)
+            self.cascade = None
+            print("Warning: license_plate_detector.pt not found and OpenCV 5+ does not support Haar Cascades. ALPR plate detection is disabled.")
 
     def detect_plates(self, frame):
         """
@@ -39,10 +39,15 @@ class VehiclePlateRecognizer:
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     boxes.append((x1, y1, x2, y2))
         else:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            plates = self.cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-            for (x, y, w, h) in plates:
-                boxes.append((x, y, x + w, y + h))
+            if self.cascade is not None:
+                # For OpenCV 4 and below
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                plates = self.cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                for (x, y, w, h) in plates:
+                    boxes.append((x, y, x + w, y + h))
+            else:
+                # If no plate detector is available, we return empty to avoid crashing
+                pass
                 
         return boxes
 
