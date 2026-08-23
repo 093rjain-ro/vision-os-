@@ -92,26 +92,24 @@ class DatabaseLogger:
         conn.commit()
         conn.close()
 
-    def log_event(self, event_type, identifier, confidence, action_taken):
+    def log_event(self, event_type, identifier, confidence, action):
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute('INSERT INTO events (timestamp, event_type, identifier, confidence, action_taken) VALUES (?, ?, ?, ?, ?)', 
-                       (timestamp, event_type, identifier, confidence, action_taken))
+        c = conn.cursor()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("INSERT INTO events (timestamp, event_type, identifier, confidence, action_taken) VALUES (?, ?, ?, ?, ?)",
+                  (timestamp, event_type, identifier, confidence, action))
         conn.commit()
         conn.close()
-        print(f"[DB] Logged {event_type}: {identifier}")
-
-    def log_attendance(self, person_id, camera_id, embedding_bytes):
+        
+    def log_attendance(self, person_id, camera_id, face_embedding):
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute('INSERT INTO attendance (timestamp, person_id, camera_id, embedding) VALUES (?, ?, ?, ?)', 
-                       (timestamp, person_id, camera_id, embedding_bytes))
+        c = conn.cursor()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("INSERT INTO attendance (timestamp, person_id, camera_id, face_embedding) VALUES (?, ?, ?, ?)",
+                  (timestamp, person_id, camera_id, face_embedding))
         conn.commit()
         conn.close()
-        print(f"[DB] Attendance Logged: {person_id}")
-
+        
     def queue_alert(self, payload_json):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
