@@ -84,28 +84,50 @@ class SmartAttendance:
             return None
         return face_obj.embedding
 
-    def match_face(self, embedding):
+    def match_face(self, embedding, logger=None):
         """
-        Matches an embedding against the enrolled faces using cosine similarity.
-        Cosine distance: 0 is exact match, 2 is exact opposite. 
-        Similarity = 1 - distance.
+        Matches an embedding against enrolled faces first.
+        If not enrolled, checks known_visitors (if enabled in config).
+        Returns: (person_id, conf, person_type)
+        person_type is "EMPLOYEE", "VISITOR", "NEW", or "UNKNOWN"
         """
-        if embedding is None or len(self.enrolled_faces) == 0:
-            return "UNKNOWN", 0.0
+        if embedding is None:
+            return "UNKNOWN", 0.0, "UNKNOWN"
             
+        # 1. Match against enrolled employees
         best_match = "UNKNOWN"
         best_sim = -1.0
         
-        for person_id, enrolled_emb in self.enrolled_faces.items():
-            # Calculate cosine distance (scipy)
-            dist = cosine(embedding, enrolled_emb)
-            sim = 1.0 - dist
-            
-            if sim > best_sim:
-                best_sim = sim
-                best_match = person_id
+        if len(self.enrolled_faces) > 0:
+            for person_id, enrolled_emb in self.enrolled_faces.items():
+                sim = 1.0 - cosine(embedding, enrolled_emb)
+                if sim > best_sim:
+                    best_sim = sim
+                    best_match = person_id
+                    
+            if best_sim >= self.match_threshold:
+                return best_match, float(best_sim), "EMPLOYEE"
                 
-        if best_sim >= self.match_threshold:
-            return best_match, float(best_sim)
+        # 2. Check Visitor Auto-ID config
+        enable_visitor = self.config.get('visitor_management', {}).get('enable_visitor_auto_id', True)
+        if not enable_visitor or logger is None:
+            return "UNKNOWN", 0.0, "UNKNOWN"
             
-        return "UNKNOWN", 0.0
+        # 3. Match against known visitors
+        visitors, counts = logger.get_all_visitors()
+        best_vis_match = "UNKNOWN"
+        best_vis_sim = -1.0
+        
+        for vid, vis_emb in visitors.items():
+            sim = 1.0 - cosine(embedding, vis_emb)
+            if sim > best_vis_sim:
+                best_vis_sim = sim
+                best_vis_match = vid
+                
+        if best_vis_sim >= self.match_threshold:
+            logger.update_visitor(best_vis_match)
+            return best_vis_match, float(best_vis_sim), "VISITOR"
+            
+        # 4. Genuinely new face
+        new_vid = logger.add_new_visitor(embedding)
+        return new_vid, 1.0, "NEW"

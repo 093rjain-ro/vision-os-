@@ -43,6 +43,13 @@ Vision OS is a comprehensive, edge-deployable computer vision and IoT security a
 
 2. **Configure Watchlists:**
    Edit `config/config.yaml` to add authorized license plates or restricted attributes (e.g., flagging 'black' clothing to enforce hi-vis vest compliance in hazard zones).
+   
+   **ALPR Configuration:**
+   Configure `ocr_every_n_frames`, `min_plate_confidence`, and `plate_format_regex` under the `alpr:` section to optimize performance and filter out invalid reads at high-throughput gates.
+   
+   **Visitor Auto-ID & Privacy:**
+   You can enable auto-tracking for unenrolled faces via `visitor_management.enable_visitor_auto_id`. 
+   *Note: Auto-collecting biometric embeddings of unenrolled visitors may require legal/consent review depending on your jurisdiction. A `visitor_retention_days` guardrail (default 30 days) is included to automatically purge stale records.*
 
 3. **Run the Edge Appliance:**
    Open two terminals:

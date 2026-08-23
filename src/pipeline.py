@@ -24,6 +24,9 @@ class VisionOSPipeline:
         self.stream = VideoStream(source=self.config['camera']['source'])
         self.enhancer = ImageEnhancer()
         self.tracker = CentroidTracker()
+        self.vehicle_tracker = CentroidTracker(max_disappeared=10)
+        self.vehicle_read_counts = {}
+        self.vehicle_best_reads = {}
         self.storage = StorageManager()
         
         # Detection Models
@@ -44,6 +47,10 @@ class VisionOSPipeline:
         self.cooldown_cfg = self.config.get('cooldowns', {'attendance_sec': 300, 'alert_sec': 60})
         self.last_event_times = {}
         self.alerted_persons = set()
+        
+        # Purge old visitors (Feature 9)
+        retention = self.config.get('visitor_management', {}).get('visitor_retention_days', 30)
+        self.logger.purge_old_visitors(retention)
         
         # Multithreading queues
         self.frame_queue = queue.Queue(maxsize=10)
@@ -117,31 +124,73 @@ class VisionOSPipeline:
                     cv2.rectangle(frame, (x, y), (x2, y2), (0, 255, 255), 2)
                     
                     emb = self.attendance.generate_embedding(face_obj)
-                    person_id, conf = self.attendance.match_face(emb)
+                    person_id, conf, person_type = self.attendance.match_face(emb, self.logger)
                     
                     if person_id != "UNKNOWN":
-                        cv2.putText(frame, f"Logged: {person_id}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                        # Determine display label
+                        label = person_id
+                        if person_type == "VISITOR":
+                            # Check if regular visitor
+                            _, counts = self.logger.get_all_visitors()
+                            count = counts.get(person_id, 1)
+                            if count >= self.config.get('visitor_management', {}).get('regular_visitor_threshold', 10):
+                                label = f"Regular: {person_id}"
+                            else:
+                                label = f"Visitor: {person_id}"
+                        
+                        cv2.putText(frame, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                        
+                        # Logging & Alert logic
                         dedup_key = f"attendance_{person_id}"
                         if self.check_cooldown(dedup_key, self.cooldown_cfg.get('attendance_sec', 300)):
-                            self.logger.log_attendance(person_id, self.config['system']['camera_id'], b"mock_blob")
-                            event_triggered = True
+                            if person_type == "EMPLOYEE":
+                                self.logger.log_attendance(person_id, self.config['system']['camera_id'], b"mock_blob")
+                            elif person_type == "NEW":
+                                self.notifier.send_alert(f"New/unrecognized person detected: {person_id}", "New Visitor", self.logger)
+                                self.logger.log_event("New Visitor", person_id, 1.0, "Alert Sent")
+                                event_triggered = True
 
-                # Detect vehicles
-                vehicle_boxes = self.plate_recognizer.detect_vehicles(frame)
-                for (x1, y1, x2, y2) in vehicle_boxes:
+                import re
+                plate_boxes = self.plate_recognizer.detect_plates(frame)
+                assigned_plates, evicted_plates = self.vehicle_tracker.update(plate_boxes)
+                
+                for ev_id in evicted_plates:
+                    self.vehicle_read_counts.pop(ev_id, None)
+                    self.vehicle_best_reads.pop(ev_id, None)
+                    
+                alpr_cfg = self.config.get('alpr', {})
+                ocr_freq = alpr_cfg.get('ocr_every_n_frames', 5)
+                min_conf = alpr_cfg.get('min_plate_confidence', 0.5)
+                plate_regex = alpr_cfg.get('plate_format_regex', '^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$')
+                
+                for obj_id, (x1, y1, x2, y2) in assigned_plates:
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    h_b = y2 - y1
-                    plate_crop = frame[y1 + h_b//2 : y2, x1:x2]
-                    enhanced_crop = self.enhancer.enhance(plate_crop)
-                    plate_text, conf = self.plate_recognizer.read_plate(enhanced_crop)
-                    if plate_text:
-                        cv2.putText(frame, f"{plate_text} ({conf:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-                        if plate_text in self.auth_plates:
-                            self.actuator.open_barrier()
-                            self.logger.log_event("Access Granted", plate_text, conf, "Barrier Opened")
-                        else:
-                            self.logger.log_event("Access Denied", plate_text, conf, "None")
-                        event_triggered = True
+                    
+                    count = self.vehicle_read_counts.get(obj_id, 0)
+                    
+                    if count % ocr_freq == 0:
+                        plate_crop = frame[y1:y2, x1:x2]
+                        enhanced_crop = self.enhancer.enhance(plate_crop) # Enhancer ONLY called when doing OCR
+                        plate_text, conf = self.plate_recognizer.read_plate(enhanced_crop)
+                        
+                        if plate_text and conf >= min_conf:
+                            if re.match(plate_regex, plate_text):
+                                self.vehicle_best_reads[obj_id] = (plate_text, conf)
+                                
+                                dedup_key = f"plate_{obj_id}"
+                                if self.check_cooldown(dedup_key, self.cooldown_cfg.get('alert_sec', 60)):
+                                    if plate_text in self.auth_plates:
+                                        self.actuator.open_barrier()
+                                        self.logger.log_event("Access Granted", plate_text, conf, "Barrier Opened")
+                                    else:
+                                        self.logger.log_event("Access Denied", plate_text, conf, "None")
+                                    event_triggered = True
+                            
+                    self.vehicle_read_counts[obj_id] = count + 1
+                    
+                    best_read = self.vehicle_best_reads.get(obj_id)
+                    if best_read:
+                        cv2.putText(frame, f"{best_read[0]} ({best_read[1]:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
                             
                 # Intruder detection
                 person_boxes = self.person_extractor.detect_persons(frame)

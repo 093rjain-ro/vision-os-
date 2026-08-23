@@ -31,6 +31,16 @@ storage:
   stream_a_res: [640, 480]
   stream_b_res: [1920, 1080]
 
+alpr:
+  ocr_every_n_frames: 5
+  min_plate_confidence: 0.5
+  plate_format_regex: '^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$'
+
+visitor_management:
+  enable_visitor_auto_id: true
+  visitor_retention_days: 30
+  regular_visitor_threshold: 10
+
 alerting:
   # Use a private broker for secure alerting. E.g. "your-private-broker.example.com"
   # Defaulting to localhost placeholder so public broker isn't used insecurely.

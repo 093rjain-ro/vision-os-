@@ -23,6 +23,7 @@ def get_db_data(query):
 st.sidebar.title("Vision OS Security")
 page = st.sidebar.radio("Navigation", [
     "Live Monitoring", 
+    "Live Alerts (New Faces)",
     "Smart Attendance", 
     "Alarms & Sirens", 
     "Alert Queue & Comm",
@@ -47,6 +48,29 @@ if page == "Live Monitoring":
                 image_placeholder.image("data/latest_frame.jpg", use_container_width=True)
             except: pass
         time.sleep(0.1)
+
+elif page == "Live Alerts (New Faces)":
+    st.title("Live Alerts & Known Visitors")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("New/Unrecognized Faces")
+        new_faces_df = get_db_data("SELECT timestamp, identifier FROM events WHERE event_type = 'New Visitor' ORDER BY id DESC LIMIT 10")
+        if new_faces_df.empty:
+            st.success("No new unrecognized faces detected.")
+        else:
+            st.dataframe(new_faces_df, use_container_width=True, hide_index=True)
+            
+    with col2:
+        st.subheader("Known Visitors DB")
+        visitors_df = get_db_data("SELECT visitor_id, first_seen, last_seen, seen_count FROM visitors ORDER BY last_seen DESC LIMIT 20")
+        if visitors_df.empty:
+            st.info("No visitors recorded yet.")
+        else:
+            # Add Regular badge
+            threshold = 10
+            visitors_df['Status'] = visitors_df['seen_count'].apply(lambda x: '⭐ Regular' if x >= threshold else 'Visitor')
+            st.dataframe(visitors_df, use_container_width=True, hide_index=True)
 
 elif page == "Smart Attendance":
     st.title("Smart Attendance Log")
