@@ -36,13 +36,13 @@ Vision OS is a comprehensive, edge-deployable computer vision and IoT security a
 
 1. **Clone & Install Dependencies:**
    ```bash
-   git clone https://github.com/yourusername/vision_os.git
-   cd vision_os
+   git clone https://github.com/093rjain-ro/vision-os-.git
+   cd vision-os-
    pip install -r requirements.txt
    ```
 
 2. **Configure Watchlists:**
-   Edit `config/config.yaml` to add authorized license plates or restricted attributes (e.g., restricting 'Women' or 'Red Shirts' in specific zones).
+   Edit `config/config.yaml` to add authorized license plates or restricted attributes (e.g., flagging 'black' clothing to enforce hi-vis vest compliance in hazard zones).
 
 3. **Run the Edge Appliance:**
    Open two terminals:

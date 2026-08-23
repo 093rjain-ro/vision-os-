@@ -11,20 +11,32 @@ class AlertNotifier:
         # Load mock location
         try:
             with open(config_path, 'r') as f:
-                self.location = yaml.safe_load(f).get('alerting', {}).get('mock_lat_lon', 'unknown')
-        except:
+                cfg = yaml.safe_load(f).get('alerting', {})
+                self.location = cfg.get('mock_lat_lon', 'unknown')
+                username = cfg.get('mqtt_username', None)
+                password = cfg.get('mqtt_password', None)
+                use_tls = cfg.get('mqtt_use_tls', False)
+        except Exception as e:
+            print(f"Error loading config in AlertNotifier: {e}")
             self.location = 'unknown'
+            username = password = None
+            use_tls = False
             
         self.client = mqtt.Client()
         self.connected = False
         
         try:
+            if username and password:
+                self.client.username_pw_set(username, password)
+            if use_tls:
+                self.client.tls_set()
+                
             self.client.connect(self.broker, 1883, 60)
-            print(f"Connected to MQTT broker at {self.broker}")
+            print(f"Connected securely to MQTT broker at {self.broker}")
             self.client.loop_start()
             self.connected = True
         except Exception as e:
-            print(f"MQTT Connection failed: {e}. Running in console-only mode.")
+            print(f"MQTT Connection failed: {e}. Running in console-only/queue mode.")
             self.client = None
 
     def send_alert(self, message, event_type="Security Alert", logger=None):
@@ -45,7 +57,10 @@ class AlertNotifier:
         else:
             if logger: logger.queue_alert(payload_json)
                 
-    def __del__(self):
+    def close(self):
         if self.client:
             self.client.loop_stop()
             self.client.disconnect()
+            
+    def __del__(self):
+        self.close()

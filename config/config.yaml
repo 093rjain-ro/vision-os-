@@ -13,11 +13,12 @@ hardware:
   cellular_modem_port: "/dev/ttyUSB0"
 
 access_control:
+  face_match_threshold: 0.6 # Cosine similarity threshold for Smart Attendance
   authorized_plates:
     - "MH12AB1234"
     - "KA01XYZ999"
   unauthorized_attributes:
-    - gender: "Women" # Example of an unauthorized attribute rule
+    - color: "black" # Example: Non hi-vis clothing in a safety zone
   # Intruder Detection Zone Masking (Feature 3)
   zones:
     Zone_A:
@@ -31,8 +32,13 @@ storage:
   stream_b_res: [1920, 1080]
 
 alerting:
-  mqtt_broker: "mqtt.eclipseprojects.io"
+  # Use a private broker for secure alerting. E.g. "your-private-broker.example.com"
+  # Defaulting to localhost placeholder so public broker isn't used insecurely.
+  mqtt_broker: "localhost" 
   mqtt_topic: "vision_os/alerts"
+  mqtt_username: "admin"
+  mqtt_password: "secure_password"
+  mqtt_use_tls: false # set to true for production TLS
   mock_lat_lon: "37.7749,-122.4194" # Feature 12: Approximate Location
   cooldowns:
     attendance_sec: 300 # 5 minutes

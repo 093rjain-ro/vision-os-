@@ -35,19 +35,38 @@ class PersonAttributeExtractor:
                 boxes.append((x1, y1, x2, y2))
         return boxes
 
-    def estimate_gender(self, person_crop):
+    def extract_dominant_color(self, person_crop):
         """
-        Estimates gender. In a production build, this would use a dedicated CNN model 
-        (e.g., FairFace or DeepFace) to analyze the face crop. 
-        For this prototype, without downloading a heavy model, we mock it based on image brightness 
-        just to demonstrate the routing logic on the dashboard.
+        Estimates the dominant clothing color of a person crop.
+        Used for safety compliance (e.g. checking for hi-vis colors).
         """
         if person_crop is None or person_crop.size == 0:
-            return "Men"
+            return "unknown"
             
-        # Dummy classification for prototype demonstration
-        avg_brightness = np.mean(person_crop)
-        if avg_brightness > 120:
-            return "Men"
-        else:
-            return "Women"
+        # Focus on the upper half for shirt/jacket color
+        h, w = person_crop.shape[:2]
+        upper_half = person_crop[0:max(1, h//2), :]
+        
+        hsv = cv2.cvtColor(upper_half, cv2.COLOR_BGR2HSV)
+        
+        best_color = "unknown"
+        max_pixels = 0
+        
+        for color_name, ranges in self.color_ranges.items():
+            mask = np.zeros(hsv.shape[:2], dtype="uint8")
+            if len(ranges) == 4: # Red has two ranges in HSV
+                mask1 = cv2.inRange(hsv, ranges[0], ranges[1])
+                mask2 = cv2.inRange(hsv, ranges[2], ranges[3])
+                mask = cv2.bitwise_or(mask1, mask2)
+            else:
+                mask = cv2.inRange(hsv, ranges[0], ranges[1])
+                
+            pixels = cv2.countNonZero(mask)
+            if pixels > max_pixels:
+                max_pixels = pixels
+                best_color = color_name
+                
+        # Threshold to ensure it's a significant portion
+        if max_pixels > (h//2 * w) * 0.1: # At least 10% of upper half
+            return best_color
+        return "unknown"

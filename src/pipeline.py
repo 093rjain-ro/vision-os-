@@ -1,6 +1,8 @@
 import cv2
 import yaml
 import time
+import queue
+import threading
 from core.video_stream import VideoStream
 from core.enhancer import ImageEnhancer
 from core.tracker import CentroidTracker
@@ -24,7 +26,7 @@ class VisionOSPipeline:
         self.tracker = CentroidTracker()
         self.storage = StorageManager()
         
-        # Detection Models (Tier 1 & 2 Hybrid - Feature 6)
+        # Detection Models
         self.plate_recognizer = VehiclePlateRecognizer()
         self.person_extractor = PersonAttributeExtractor()
         self.attendance = SmartAttendance()
@@ -41,8 +43,13 @@ class VisionOSPipeline:
         # Cooldown state dictionaries to prevent DB spam
         self.cooldown_cfg = self.config.get('cooldowns', {'attendance_sec': 300, 'alert_sec': 60})
         self.last_event_times = {}
-        self.alerted_persons = set() # Trackers
+        self.alerted_persons = set()
         
+        # Multithreading queues
+        self.frame_queue = queue.Queue(maxsize=10)
+        self.write_queue = queue.Queue(maxsize=10)
+        self.running = False
+
     def check_cooldown(self, dedup_key, cooldown_sec):
         now = time.time()
         last_seen = self.last_event_times.get(dedup_key, 0)
@@ -51,101 +58,132 @@ class VisionOSPipeline:
             return True
         return False
         
-    def run(self):
-        print("Starting Advanced Vision OS Pipeline with Cooldowns...")
-        
-        while True:
+    def capture_loop(self):
+        while self.running:
             ret, frame = self.stream.get_frame()
-            if not ret: break
+            if not ret: 
+                break
+            try:
+                self.frame_queue.put(frame, block=False)
+            except queue.Full:
+                pass # Drop oldest or just skip frame
                 
-            # Feature 5: Dual-Stream (Stream A continuous save)
-            self.storage.save_stream_a(frame)
-            event_triggered = False
+    def write_loop(self):
+        while self.running or not self.write_queue.empty():
+            try:
+                frame, save_event = self.write_queue.get(timeout=1.0)
+                self.storage.save_stream_a(frame)
+                cv2.imwrite("data/latest_frame.jpg", frame)
+                if save_event:
+                    self.storage.save_event_frame(frame, "EVENT")
+            except queue.Empty:
+                continue
 
-            # Feature 2: Fire & Smoke (Tier 1)
-            is_fire, fire_conf = self.fire_detector.detect(frame)
-            if is_fire:
-                cv2.putText(frame, "FIRE DETECTED", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
-                if self.check_cooldown("fire_alert", self.cooldown_cfg.get('alert_sec', 60)):
-                    self.actuator.trigger_alert()
-                    self.notifier.send_alert("FIRE/SMOKE DETECTED", "Fire Alert", self.logger)
-                    self.logger.log_event("Fire Alert", "Fire/Smoke", fire_conf, "Alarm Latched")
-                    event_triggered = True
-                
-            # Feature 1: Smart Attendance
-            faces = self.attendance.detect_faces(frame)
-            for (x, y, w, h) in faces:
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 255), 2)
-                crop = frame[y:y+h, x:x+w]
-                emb = self.attendance.generate_embedding(crop)
-                person_id, conf = self.attendance.match_face(emb)
-                
-                if person_id != "UNKNOWN":
-                    cv2.putText(frame, f"Logged: {person_id}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                    dedup_key = f"attendance_{person_id}"
-                    if self.check_cooldown(dedup_key, self.cooldown_cfg.get('attendance_sec', 300)):
-                        self.logger.log_attendance(person_id, self.config['system']['camera_id'], b"mock_blob")
-                        event_triggered = True
-
-            # Detect vehicles
-            vehicle_boxes = self.plate_recognizer.detect_vehicles(frame)
-            for (x1, y1, x2, y2) in vehicle_boxes:
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                h_b = y2 - y1
-                plate_crop = frame[y1 + h_b//2 : y2, x1:x2]
-                enhanced_crop = self.enhancer.enhance(plate_crop)
-                plate_text, conf = self.plate_recognizer.read_plate(enhanced_crop)
-                if plate_text:
-                    cv2.putText(frame, f"{plate_text} ({conf:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-                    if plate_text in self.auth_plates:
-                        self.actuator.open_barrier()
-                        self.logger.log_event("Access Granted", plate_text, conf, "Barrier Opened")
-                    else:
-                        self.logger.log_event("Access Denied", plate_text, conf, "None")
-                    event_triggered = True
-                        
-            # Detect persons (Intruder detection)
-            person_boxes = self.person_extractor.detect_persons(frame)
-            tracked_objects = self.tracker.update(person_boxes)
-            
-            for (x1, y1, x2, y2) in person_boxes:
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                
-                # Match box to tracker ID
-                cX = int((x1 + x2) / 2.0)
-                cY = int((y1 + y2) / 2.0)
-                person_id = None
-                for obj_id, centroid in tracked_objects.items():
-                    if centroid[0] == cX and centroid[1] == cY:
-                        person_id = obj_id
-                        break
-                
-                person_crop = frame[y1:y2, x1:x2]
-                gender = self.person_extractor.estimate_gender(person_crop)
-                
-                cv2.putText(frame, f"ID {person_id}: {gender}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-                            
-                unauth = self.config['access_control'].get('unauthorized_attributes', [])
-                for attr in unauth:
-                    if attr.get('gender') == gender:
-                        if person_id not in getattr(self, 'alerted_persons', set()):
-                            if not hasattr(self, 'alerted_persons'): self.alerted_persons = set()
-                            self.alerted_persons.add(person_id)
-                            
-                            self.actuator.trigger_alert()
-                            self.notifier.send_alert(f"Unauthorized person: {gender}", "Security Alert", self.logger)
-                            self.logger.log_event("Security Alert", f"Person ID {person_id}: {gender}", 1.0, "Alert Triggered")
-                            event_triggered = True
-                        break
-
-            # Feature 5: Dual-Stream (Stream B high-res save on event)
-            if event_triggered:
-                self.storage.save_event_frame(frame, "EVENT")
-
-            cv2.imwrite("data/latest_frame.jpg", frame)
-                
-        self.cleanup()
+    def run(self):
+        print("Starting Advanced Vision OS Pipeline (Multithreaded)...")
+        self.running = True
         
+        capture_thread = threading.Thread(target=self.capture_loop, daemon=True)
+        write_thread = threading.Thread(target=self.write_loop, daemon=True)
+        
+        capture_thread.start()
+        write_thread.start()
+        
+        try:
+            while self.running:
+                try:
+                    frame = self.frame_queue.get(timeout=1.0)
+                except queue.Empty:
+                    if not capture_thread.is_alive():
+                        break
+                    continue
+                    
+                event_triggered = False
+
+                # Feature 2: Fire & Smoke
+                is_fire, fire_conf = self.fire_detector.detect(frame)
+                if is_fire:
+                    cv2.putText(frame, "FIRE DETECTED", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+                    if self.check_cooldown("fire_alert", self.cooldown_cfg.get('alert_sec', 60)):
+                        self.actuator.trigger_alert()
+                        self.notifier.send_alert("FIRE/SMOKE DETECTED", "Fire Alert", self.logger)
+                        self.logger.log_event("Fire Alert", "Fire/Smoke", fire_conf, "Alarm Latched")
+                        event_triggered = True
+                    
+                # Feature 1: Smart Attendance
+                faces = self.attendance.detect_faces(frame)
+                for face_obj in faces:
+                    x, y, x2, y2 = face_obj.bbox.astype(int)
+                    cv2.rectangle(frame, (x, y), (x2, y2), (0, 255, 255), 2)
+                    
+                    emb = self.attendance.generate_embedding(face_obj)
+                    person_id, conf = self.attendance.match_face(emb)
+                    
+                    if person_id != "UNKNOWN":
+                        cv2.putText(frame, f"Logged: {person_id}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                        dedup_key = f"attendance_{person_id}"
+                        if self.check_cooldown(dedup_key, self.cooldown_cfg.get('attendance_sec', 300)):
+                            self.logger.log_attendance(person_id, self.config['system']['camera_id'], b"mock_blob")
+                            event_triggered = True
+
+                # Detect vehicles
+                vehicle_boxes = self.plate_recognizer.detect_vehicles(frame)
+                for (x1, y1, x2, y2) in vehicle_boxes:
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    h_b = y2 - y1
+                    plate_crop = frame[y1 + h_b//2 : y2, x1:x2]
+                    enhanced_crop = self.enhancer.enhance(plate_crop)
+                    plate_text, conf = self.plate_recognizer.read_plate(enhanced_crop)
+                    if plate_text:
+                        cv2.putText(frame, f"{plate_text} ({conf:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                        if plate_text in self.auth_plates:
+                            self.actuator.open_barrier()
+                            self.logger.log_event("Access Granted", plate_text, conf, "Barrier Opened")
+                        else:
+                            self.logger.log_event("Access Denied", plate_text, conf, "None")
+                        event_triggered = True
+                            
+                # Intruder detection
+                person_boxes = self.person_extractor.detect_persons(frame)
+                
+                # New CentroidTracker return format
+                assigned_objects, evicted_ids = self.tracker.update(person_boxes)
+                
+                # Remove evicted IDs from alerted set (Fix 3)
+                self.alerted_persons.difference_update(evicted_ids)
+                
+                for obj_id, (x1, y1, x2, y2) in assigned_objects:
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    person_crop = frame[y1:y2, x1:x2]
+                    
+                    color = self.person_extractor.extract_dominant_color(person_crop)
+                    cv2.putText(frame, f"ID {obj_id}: {color}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                                
+                    unauth = self.config['access_control'].get('unauthorized_attributes', [])
+                    for attr in unauth:
+                        if attr.get('color') == color:
+                            if obj_id not in self.alerted_persons:
+                                self.alerted_persons.add(obj_id)
+                                self.actuator.trigger_alert()
+                                self.notifier.send_alert(f"Unauthorized person: {color}", "Security Alert", self.logger)
+                                self.logger.log_event("Security Alert", f"Person ID {obj_id}: {color}", 1.0, "Alert Triggered")
+                                event_triggered = True
+                            break
+
+                # Send frame to writer thread
+                try:
+                    self.write_queue.put((frame, event_triggered), block=False)
+                except queue.Full:
+                    pass
+                    
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.running = False
+            self.cleanup()
+            
     def cleanup(self):
         self.stream.release()
         self.sensors.stop()
+        if hasattr(self, 'notifier'):
+            self.notifier.close()

@@ -1,60 +1,111 @@
 import cv2
 import numpy as np
-
-from ultralytics import YOLO
+import os
+import yaml
+from scipy.spatial.distance import cosine
+import insightface
+from insightface.app import FaceAnalysis
 
 class SmartAttendance:
-    def __init__(self):
+    def __init__(self, config_path="config/config.yaml"):
         """
-        Feature 1: Smart Attendance
-        Uses YOLOv8 to find persons, and assumes the top 15% of the bounding box is the head.
+        Feature 1: Smart Attendance with Real InsightFace Embeddings
         """
         try:
-            self.model = YOLO("yolov8n.pt")
-            self.person_class = 0
-        except:
-            self.model = None
+            self.app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
+            self.app.prepare(ctx_id=0, det_size=(640, 640))
+        except Exception as e:
+            print(f"Failed to load InsightFace model: {e}")
+            self.app = None
             
-        # Dummy authorized database
-        self.authorized_faces = {
-            "EMP_001": np.random.rand(128),
-            "EMP_002": np.random.rand(128)
-        }
+        try:
+            with open(config_path, 'r') as f:
+                self.config = yaml.safe_load(f)
+            self.match_threshold = self.config.get('access_control', {}).get('face_match_threshold', 0.6)
+        except Exception as e:
+            print(f"Error loading config in SmartAttendance: {e}")
+            self.match_threshold = 0.6
+            
+        self.enrolled_faces = {}
+        self.enrollment_dir = "data/enrolled_faces"
+        os.makedirs(self.enrollment_dir, exist_ok=True)
+        self.load_enrolled_faces()
+
+    def enroll_face(self, person_id, image_path):
+        """Helper to enroll a face from a photo on disk."""
+        if self.app is None: return False
+        
+        img = cv2.imread(image_path)
+        if img is None:
+            print(f"Could not read {image_path}")
+            return False
+            
+        faces = self.app.get(img)
+        if not faces:
+            print(f"No face detected in {image_path}")
+            return False
+            
+        embedding = faces[0].embedding
+        np.save(os.path.join(self.enrollment_dir, f"{person_id}.npy"), embedding)
+        self.enrolled_faces[person_id] = embedding
+        print(f"Successfully enrolled {person_id}")
+        return True
+
+    def load_enrolled_faces(self):
+        """Loads all .npy embeddings from the enrollment directory."""
+        for filename in os.listdir(self.enrollment_dir):
+            if filename.endswith(".npy"):
+                person_id = filename.replace(".npy", "")
+                try:
+                    emb = np.load(os.path.join(self.enrollment_dir, filename))
+                    self.enrolled_faces[person_id] = emb
+                except Exception as e:
+                    print(f"Failed to load embedding {filename}: {e}")
 
     def detect_faces(self, frame):
-        """Returns approximate head bounding boxes (x, y, w, h)"""
-        if self.model is None: return []
-        
-        results = self.model(frame, verbose=False)[0]
-        faces = []
-        for box in results.boxes:
-            if int(box.cls[0]) == self.person_class and float(box.conf[0]) > 0.3: # Lowered to 0.3
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                w = x2 - x1
-                h = y2 - y1
-                # Approximate face as top 15% of person bounding box
-                face_h = int(h * 0.15)
-                # Keep y1 same, adjust x to be centered
-                face_w = int(w * 0.5)
-                face_x = x1 + int((w - face_w) / 2)
-                faces.append((face_x, y1, face_w, face_h))
-        return faces
+        """
+        Returns a list of InsightFace objects containing bounding boxes and embeddings.
+        This modifies the return signature slightly to avoid double-detection.
+        """
+        if self.app is None: return []
+        try:
+            faces = self.app.get(frame)
+            return faces
+        except Exception as e:
+            print(f"Error in face detection: {e}")
+            return []
 
-    def generate_embedding(self, face_crop):
+    def generate_embedding(self, face_obj):
         """
-        Mocks a MobileFaceNet 128-d embedding generation.
+        Extracts the embedding from the insightface object.
+        Replaces the old dummy generator.
         """
-        if face_crop is None or face_crop.size == 0:
+        if face_obj is None:
             return None
-        return np.random.rand(128) # Simulated embedding
+        return face_obj.embedding
 
     def match_face(self, embedding):
         """
-        Locally matches vector against encrypted DB (simulated).
+        Matches an embedding against the enrolled faces using cosine similarity.
+        Cosine distance: 0 is exact match, 2 is exact opposite. 
+        Similarity = 1 - distance.
         """
-        if embedding is None: return None, 0
+        if embedding is None or len(self.enrolled_faces) == 0:
+            return "UNKNOWN", 0.0
+            
+        best_match = "UNKNOWN"
+        best_sim = -1.0
         
-        # Simulated match logic - random chance for prototype demo
-        if np.random.random() > 0.8:
-            return "EMP_001", 0.95
+        for person_id, enrolled_emb in self.enrolled_faces.items():
+            # Calculate cosine distance (scipy)
+            dist = cosine(embedding, enrolled_emb)
+            sim = 1.0 - dist
+            
+            if sim > best_sim:
+                best_sim = sim
+                best_match = person_id
+                
+        if best_sim >= self.match_threshold:
+            return best_match, float(best_sim)
+            
         return "UNKNOWN", 0.0
