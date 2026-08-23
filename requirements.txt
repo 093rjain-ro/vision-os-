@@ -1,0 +1,11 @@
+opencv-python
+numpy
+ultralytics
+easyocr
+pyyaml
+streamlit
+pandas
+gpiozero
+paho-mqtt
+torch
+torchvision

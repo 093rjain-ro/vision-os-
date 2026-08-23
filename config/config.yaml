@@ -1,0 +1,39 @@
+system:
+  mode: "mock" # "mock" or "edge"
+  camera_id: "CAM_FRONT_GATE_01"
+
+camera:
+  source: 0
+  resolution: [640, 480]
+
+hardware:
+  barrier_pin: 17
+  led_pin: 22
+  has_gps: false
+  cellular_modem_port: "/dev/ttyUSB0"
+
+access_control:
+  authorized_plates:
+    - "MH12AB1234"
+    - "KA01XYZ999"
+  unauthorized_attributes:
+    - gender: "Women" # Example of an unauthorized attribute rule
+  # Intruder Detection Zone Masking (Feature 3)
+  zones:
+    Zone_A:
+      polygon: [[0, 0], [320, 0], [320, 240], [0, 240]]
+      restricted_hours: ["22:00", "06:00"] # 10 PM to 6 AM
+
+storage:
+  # Dual-Stream Capture (Feature 5)
+  retention_days: 30
+  stream_a_res: [640, 480]
+  stream_b_res: [1920, 1080]
+
+alerting:
+  mqtt_broker: "mqtt.eclipseprojects.io"
+  mqtt_topic: "vision_os/alerts"
+  mock_lat_lon: "37.7749,-122.4194" # Feature 12: Approximate Location
+  cooldowns:
+    attendance_sec: 300 # 5 minutes
+    alert_sec: 60       # 1 minute
