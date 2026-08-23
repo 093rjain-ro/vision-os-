@@ -1,0 +1,10 @@
+*.py
+requirements.txt
+src/
+models/
+data/
+config/
+dashboard/
+.venv/
+venv/
+__pycache__/

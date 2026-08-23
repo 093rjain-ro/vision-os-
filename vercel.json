@@ -1,6 +1,0 @@
-{
-  "version": 2,
-  "buildCommand": "echo 'Static site - no build required'",
-  "installCommand": "echo 'Static site - no install required'",
-  "outputDirectory": "."
-}
