@@ -31,6 +31,30 @@ class ImageEnhancer:
             
             return enhanced
         else:
-            # Placeholder for DNN based super-resolution
-            # e.g., using cv2.dnn_superres.DnnSuperResImpl_create()
-            return frame
+            # DNN based super-resolution using cv2.dnn_superres
+            try:
+                import os
+                import urllib.request
+                
+                model_path = "models/FSRCNN_x2.pb"
+                if not hasattr(self, 'sr'):
+                    if not os.path.exists("models"):
+                        os.makedirs("models")
+                        
+                    # Auto-download lightweight FSRCNN model if missing
+                    if not os.path.exists(model_path):
+                        print(f"Downloading FSRCNN_x2.pb to {model_path}...")
+                        url = "https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/FSRCNN_x2.pb"
+                        urllib.request.urlretrieve(url, model_path)
+                        
+                    self.sr = cv2.dnn_superres.DnnSuperResImpl_create()
+                    self.sr.readModel(model_path)
+                    self.sr.setModel("fsrcnn", 2) # Algorithm=fsrcnn, Scale=2
+                
+                # Apply super resolution
+                enhanced = self.sr.upsample(frame)
+                return enhanced
+            except Exception as e:
+                print(f"Super Resolution failed: {e}. Falling back to fast method.")
+                self.method = "fast"
+                return self.enhance(frame)
