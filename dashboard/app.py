@@ -42,12 +42,12 @@ if page == "Live Monitoring":
         events_df = get_db_data("SELECT timestamp, event_type, identifier FROM events ORDER BY id DESC LIMIT 10")
         st.dataframe(events_df, use_container_width=True, hide_index=True)
         
-    while True:
-        if os.path.exists("data/latest_frame.jpg"):
-            try:
-                image_placeholder.image("data/latest_frame.jpg", use_container_width=True)
-            except: pass
-        time.sleep(0.1)
+    if os.path.exists("data/latest_frame.jpg"):
+        try:
+            image_placeholder.image("data/latest_frame.jpg", use_container_width=True)
+        except: pass
+    time.sleep(0.1)
+    st.rerun()
 
 elif page == "Live Alerts (New Faces)":
     st.title("Live Alerts & Known Visitors")
